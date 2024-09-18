@@ -1,0 +1,428 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+
+  InstanceId:
+    Type: String
+    Description: The ID of the Connect instance to monitor
+    Default: e55a89e5-1e8f-4696-8955-1688d28c7e36
+
+  TopicName:
+    Type: String
+    Description: Name of the SNS topic
+    Default: MySNSTopic
+
+  SourceEmail:
+    Type: String
+    Description: The source email address for sending SES notifications
+    Default: yeshwant.rajaraman@cdw.com
+
+  SubscriberEmails:
+    Type: CommaDelimitedList
+    Description: List of email addresses to subscribe to the SNS topic
+    Default: rajalakshmi.ramesh@cdw.com
+  
+Resources:
+  MyLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: 'iamroleyamlcloudwatchtest'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'FullAccessCloudWatch'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'logs:*'
+                  - 'cloudwatch:*'
+                Resource: '*'
+
+  MyLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties: 
+      FunctionName: 'yamlcloudwatchtest'
+      Runtime: 'python3.11'
+      Role: !GetAtt MyLambdaExecutionRole.Arn
+      Handler: 'lambda_function.lambda_handler'
+      Code:
+        S3Bucket: 'testlambdakjrjyesh'       # Replace with your S3 bucket name
+        S3Key: 'lambda_function.zip'  # Replace with your S3 object key
+      Environment:
+        Variables:
+          # AWSConnectARN: '15e62379-5da6-4894-a63d-0aa38892ad7c'
+          # SalesforceRestAPIFlowARN: 'bfc98717-4f7b-4ed1-8f40-cb4092b193bd'
+          AWSConnectARN: !Ref InstanceId
+          SalesforceRestAPIFlowARN: !Ref InstanceId
+      MemorySize: 128
+      Timeout: 60
+
+  MyApiGateway:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name: 'yamlcloudwatchmetrics'
+      Description: 'API Gateway for CloudWatch Metrics'
+
+  MyApiResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt MyApiGateway.RootResourceId
+      PathPart: 'yamlcloudwatchtest'
+      RestApiId: !Ref MyApiGateway
+
+  MyApiMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: 'NONE'
+      HttpMethod: 'GET'
+      ResourceId: !Ref MyApiResource
+      RestApiId: !Ref MyApiGateway
+      RequestParameters:
+        method.request.querystring.timeframeLength: false
+        method.request.querystring.timeframeUnit: false
+      Integration:
+        IntegrationHttpMethod: 'POST'
+        Type: 'AWS'
+        Uri: 
+          Fn::Sub: 
+            - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+            - LambdaArn: !GetAtt MyLambdaFunction.Arn
+        RequestParameters:
+          integration.request.querystring.timeframeLength: 'method.request.querystring.timeframeLength'
+          integration.request.querystring.timeframeUnit: 'method.request.querystring.timeframeUnit'
+        RequestTemplates:
+          application/json: |
+            {
+              "timeframeLength": "$input.params('timeframeLength')",
+              "timeframeUnit": "$input.params('timeframeUnit')"
+            }
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              'method.response.header.Access-Control-Allow-Origin': "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            'method.response.header.Access-Control-Allow-Origin': true
+
+
+  MyApiOptionsMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: 'NONE'
+      HttpMethod: 'OPTIONS'
+      ResourceId: !Ref MyApiResource
+      RestApiId: !Ref MyApiGateway
+      Integration:
+        IntegrationHttpMethod: 'OPTIONS'
+        Type: 'MOCK'
+        RequestTemplates:
+          application/json: '{}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              'method.response.header.Access-Control-Allow-Origin': "'*'"
+              'method.response.header.Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              'method.response.header.Access-Control-Allow-Methods': "'OPTIONS,GET'"
+            ResponseTemplates:
+              application/json: '{}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            'method.response.header.Access-Control-Allow-Origin': true
+            'method.response.header.Access-Control-Allow-Headers': true
+            'method.response.header.Access-Control-Allow-Methods': true
+
+
+  MyApiDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    Properties:
+      RestApiId: !Ref MyApiGateway
+      StageName: 'testing'
+    DependsOn:
+      - MyApiMethod
+      - MyApiOptionsMethod
+
+  LambdaApiGatewayInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref MyLambdaFunction
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: 
+        Fn::Sub: 
+          - arn:aws:execute-api:${AWSRegion}:${AWSAccountId}:${MyApiId}/*/${MyApiMethod}/${MyApiResourcePath}
+          - AWSRegion: !Ref "AWS::Region"
+            AWSAccountId: !Ref "AWS::AccountId"
+            MyApiId: !Ref MyApiGateway
+            MyApiMethod: "GET"
+            MyApiResourcePath: "yamlcloudwatchtest"
+
+  MySNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Ref TopicName
+
+  MySNSSubscriptions:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://testlambdakjrjyesh.s3.amazonaws.com/my-sns-subscriptions-template.yaml"
+      Parameters:
+        TopicArn: !Ref MySNSTopic
+        SubscriberEmails: !Join [ ",", !Ref SubscriberEmails ]
+
+  SESLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt SESLambdaExecutionRole.Arn
+      Runtime: python3.11
+      Timeout: 300
+      Environment:
+        Variables:
+          SUBSCRIBER_EMAILS: !Join [ ",", !Ref SubscriberEmails ]
+          SOURCE_EMAIL: !Ref SourceEmail
+      Code:
+        S3Bucket: 'testlambdakjrjyesh'       # Replace with your S3 bucket name
+        S3Key: 'SNS_alert_lambda.zip'  # Replace with your S3 object key
+          
+  SESLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SESLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: 'arn:aws:logs:*:*:*'
+
+  SESLambdaSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref MySNSTopic
+      Protocol: lambda
+      Endpoint: !GetAtt SESLambdaFunction.Arn
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SESLambdaFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: 'sns.amazonaws.com'
+      SourceArn: !Ref MySNSTopic
+
+  CallsPerInterval:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${InstanceId}-CallsPerInterval-Alarm"
+      Namespace: AWS/Connect
+      MetricName: CallsPerInterval
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+        - Name: MetricGroup
+          Value: VoiceCalls
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MySNSTopic
+
+  MissedCallsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${InstanceId}-MissedCalls-Alarm"
+      Namespace: AWS/Connect
+      MetricName: MissedCalls
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+        - Name: MetricGroup
+          Value: VoiceCalls
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MySNSTopic
+
+  CallsBreachingConcurrencyQuota:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${InstanceId}-CallsBreachingConcurrencyQuota-Alarm"
+      Namespace: AWS/Connect
+      MetricName: CallsBreachingConcurrencyQuota
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+        - Name: MetricGroup
+          Value: VoiceCalls
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MySNSTopic
+
+  CallRecordingUploadError:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${InstanceId}-CallRecordingUploadError-Alarm"
+      Namespace: AWS/Connect
+      MetricName: CallRecordingUploadError
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+        - Name: MetricGroup
+          Value: VoiceCalls
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MySNSTopic
+
+
+  ChatsBreachingActiveChatQuota:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${InstanceId}-ChatsBreachingActiveChatQuota-Alarm"
+      Namespace: AWS/Connect
+      MetricName: ChatsBreachingActiveChatQuota
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+        - Name: MetricGroup
+          Value: VoiceCalls
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MySNSTopic
+
+     
+  ConcurrentActiveChats:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${InstanceId}-ConcurrentActiveChats-Alarm"
+      Namespace: AWS/Connect
+      MetricName: ConcurrentActiveChats
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+        - Name: MetricGroup
+          Value: VoiceCalls
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MySNSTopic
+
+  ContactFlowErrors:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${InstanceId}-ContactFlowErrors-Alarm"
+      Namespace: AWS/Connect
+      MetricName: ContactFlowErrors
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+        - Name: MetricGroup
+          Value: VoiceCalls
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MySNSTopic
+
+  ContactFlowFatalErrors:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${InstanceId}-ContactFlowFatalErrors-Alarm"
+      Namespace: AWS/Connect
+      MetricName: ContactFlowFatalErrors
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+        - Name: MetricGroup
+          Value: VoiceCalls
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MySNSTopic
+
+  ThrottledCalls:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${InstanceId}-ThrottledCalls-Alarm"
+      Namespace: AWS/Connect
+      MetricName: ThrottledCalls
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+        - Name: MetricGroup
+          Value: VoiceCalls
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MySNSTopic
+
+  ToInstancePacketLossRate:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${InstanceId}-ToInstancePacketLossRate-Alarm"
+      Namespace: AWS/Connect
+      MetricName: ToInstancePacketLossRate
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+        - Name: MetricGroup
+          Value: VoiceCalls
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MySNSTopic
