@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates a Cognito User Pool eith attached app client to use for API Gateway Authentication
+Parameters:
+  CognitoUserPoolName:
+    Type: String
+    Description: "User pool names cannot be changed once the pool is created. User pool names are limited to 128 characters or less. Names may only contain alphanumeric characters, spaces, and the following special characters: + = , . @ -"
+  CognitoUserPoolAppClientName:
+    Type: String
+    Description: "App client names are limited to 128 characters or less. Names may only contain alphanumeric characters, spaces, and the following special characters: + = , . @ -"
+  CognitoUserPoolClientCallbackURL: 
+    Type: String
+    Description: "The URL for where you want to be directed after signing in through Cognito to access your metrics page. Must be https format, so must include https:// in this input box. Could be a cloudfront distribution url or an S3 bucket object url"
+  CognitoUserPoolDomainName:
+    Type: String
+    Description: "Enter the prefix of the domain for example: https://{Your Domain Here}.auth.us-east-1.amazoncognito.com. Domain prefixes may only include lowercase, alphanumeric characters, and hyphens. You can't use the text aws, amazon, or cognito in the domain prefix. Your domain prefix must be unique within the current Region."
+Resources:
+  MyCognitoUserPool:
+    Type: 'AWS::Cognito::UserPool'
+    Properties:
+      UserPoolName: !Ref CognitoUserPoolName
+      AccountRecoverySetting: #Want to enable self service account recovery with email
+        RecoveryMechanisms:
+          - Name: 'verified_email'
+            Priority: 1
+      AdminCreateUserConfig: #Want to disable self sign up, so user pool is more private, only admins can create users, leave the default cognito email message
+          AllowAdminCreateUserOnly: true
+      AutoVerifiedAttributes: #Cognito only needs to verify email attribute, in sign up experience
+        - email
+      DeletionProtection: 'ACTIVE' #Protects from accidental deletion
+      DeviceConfiguration: #Do not remember user devices, in sign in experience under device tracking
+        ChallengeRequiredOnNewDevice: false
+        DeviceOnlyRememberedOnUserPrompt: false 
+      EmailConfiguration: #Configure message delivery, send email with Cognito using default no-reply@verificationemail.com
+        EmailSendingAccount: 'COGNITO_DEFAULT'
+      MfaConfiguration: 'OFF' #No mfa for testing purposes, should change in future
+      Policies:
+        PasswordPolicy:
+            MinimumLength: 8
+            RequireLowercase: true
+            RequireNumbers: true
+            RequireSymbols: true
+            RequireUppercase: true
+            TemporaryPasswordValidityDays: 7
+      Schema:
+        - AttributeDataType: String
+          Name: email
+          Mutable: false
+          Required: true
+      UsernameAttributes:
+        - email
+      # No need for VerificationMessageTemplate because have enabled the default with EmailSendingAccount Cognito_Default
+  MyUserPoolClient:
+    Type: 'AWS::Cognito::UserPoolClient'
+    Properties:
+      UserPoolId: !Ref MyCognitoUserPool  # Reference the user pool created above
+      ClientName: !Ref CognitoUserPoolAppClientName
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      AllowedOAuthFlows:
+        - implicit
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - phone
+      AuthSessionValidity: 3
+      CallbackURLs: 
+        - !Ref CognitoUserPoolClientCallbackURL
+      EnableTokenRevocation: true
+      # ExplicitAuthFlows: Using the default flows which are ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH, and ALLOW_CUSTOM_AUTH
+      GenerateSecret: false  # If true, generates a client secret for server-side apps
+      # LogoutURLs: Have not configured yet, so leaving blank for now
+      #   - https://example.com/logout    # URL for logout redirection
+      SupportedIdentityProviders:
+        - COGNITO  # Support for Cognito as an identity provider
+      PreventUserExistenceErrors: ENABLED  # Prevents detailed errors for non-existent users
+      ReadAttributes:
+        - address
+        - birthdate
+        - email
+        - email_verified
+        - family_name
+        - gender
+        - given_name
+        - locale
+        - middle_name
+        - name
+        - nickname
+        - phone_number
+        - phone_number_verified
+        - picture
+        - preferred_username
+        - profile
+        - updated_at
+        - website
+        - zoneinfo
+      WriteAttributes:
+        - address
+        - birthdate
+        - email
+        - family_name
+        - gender
+        - given_name
+        - locale
+        - middle_name
+        - name
+        - nickname
+        - phone_number
+        - picture
+        - preferred_username
+        - profile
+        - updated_at
+        - website
+        - zoneinfo
+  MyUserPoolDomain:
+    Type: 'AWS::Cognito::UserPoolDomain'
+    Properties:
+      Domain: !Ref CognitoUserPoolDomainName  # The prefix for your Cognito domain
+      UserPoolId: !Ref MyCognitoUserPool  # Reference the user pool created above
+
+
+      
+      
+
+Outputs:
+  UserPoolId:
+    Description: 'The ID of the Cognito User Pool'
+    Value: !Ref MyCognitoUserPool
+  UserPoolClientId:
+    Description: 'The Client ID for the Cognito User Pool App Client'
+    Value: !Ref MyUserPoolClient
+  UserPoolDomainUrl:
+    Description: 'URL for the Cognito Hosted UI'
+    Value: !Sub 'https://${CognitoUserPoolDomainName}.auth.${AWS::Region}.amazoncognito.com'
