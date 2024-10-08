@@ -1,0 +1,68 @@
+# .github/workflows/track-changes.yml
+
+name: Track Changes
+
+# Trigger the workflow on push and pull request events
+on:
+  push:
+    branches: 
+      - main
+      - develop
+      - feature/**  # Adjust branches as needed
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+      - develop
+      - feature/**  # Adjust branches as needed
+
+jobs:
+  track_changes:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # Step 2: Set up Git to retrieve commit details
+      - name: Set up Git
+        run: |
+          git config --global --add safe.directory /github/workspace
+
+      # Step 3: Retrieve Commit Information
+      - name: Get Commit Information
+        id: commit_info
+        run: |
+          # For push events, get the latest commit
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            COMMIT_SHA=${{ github.sha }}
+            AUTHOR_NAME=$(git log -1 --pretty=format:'%an' $COMMIT_SHA)
+            AUTHOR_EMAIL=$(git log -1 --pretty=format:'%ae' $COMMIT_SHA)
+            COMMIT_MESSAGE=$(git log -1 --pretty=format:'%s' $COMMIT_SHA)
+            FILES_CHANGED=$(git diff-tree --no-commit-id --name-only -r $COMMIT_SHA)
+          fi
+
+          # For pull_request events, get the PR author and changes
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            COMMIT_SHA=${{ github.event.pull_request.head.sha }}
+            AUTHOR_NAME=${{ github.event.pull_request.user.login }}
+            AUTHOR_EMAIL=${{ github.event.pull_request.user.email || 'N/A' }}
+            COMMIT_MESSAGE=${{ github.event.pull_request.title }}
+            FILES_CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }} $COMMIT_SHA)
+          fi
+
+          # Export variables for later steps
+          echo "AUTHOR_NAME=${AUTHOR_NAME}" >> $GITHUB_ENV
+          echo "AUTHOR_EMAIL=${AUTHOR_EMAIL}" >> $GITHUB_ENV
+          echo "COMMIT_MESSAGE=${COMMIT_MESSAGE}" >> $GITHUB_ENV
+          echo "FILES_CHANGED=${FILES_CHANGED}" >> $GITHUB_ENV
+
+      # Step 4: Log the Commit Information
+      - name: Log Commit Information
+        run: |
+          echo "### Commit Information ###"
+          echo "**Author:** $AUTHOR_NAME ($AUTHOR_EMAIL)"
+          echo "**Commit Message:** $COMMIT_MESSAGE"
+          echo "**Files Changed:**"
+          echo "$FILES_CHANGED"
